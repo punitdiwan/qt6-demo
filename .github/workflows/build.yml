@@ -74,17 +74,41 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --parallel
 
-      # Collect HelloQt6.exe + all required Qt DLLs into deploy/
+      # Collect HelloQt6.exe + Qt DLLs + VC++ runtime DLLs into deploy/.
+      # Local DLL deployment means the app is self-contained: it carries its
+      # own copies of VCRUNTIME140.dll / MSVCP140.dll so it runs on any
+      # Windows 10+ machine without requiring the VC++ redistributable.
       - name: Stage with windeployqt
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force deploy | Out-Null
           Copy-Item "build\Release\HelloQt6.exe" deploy\
+
           windeployqt `
             --no-translations `
             --no-system-d3d-compiler `
             --no-opengl-sw `
             deploy\HelloQt6.exe
+
+          # windeployqt does not always copy the VC++ runtime on CI runners.
+          # Copy them explicitly from System32 (always present on windows-latest).
+          $vcDlls = @(
+            'VCRUNTIME140.dll',    # C runtime
+            'VCRUNTIME140_1.dll',  # C runtime (VS 2019+)
+            'MSVCP140.dll',        # C++ standard library
+            'MSVCP140_1.dll',      # C++ STL extensions
+            'MSVCP140_2.dll',      # C++ STL extensions
+            'concrt140.dll'        # Concurrency runtime
+          )
+          foreach ($dll in $vcDlls) {
+            $src = "$env:SystemRoot\System32\$dll"
+            if (Test-Path $src) {
+              Copy-Item $src deploy\
+              Write-Host "Bundled: $dll"
+            } else {
+              Write-Host "Not present (skipping): $dll"
+            }
+          }
 
       # Feature 8: embed VC++ 2022 runtime so it installs silently on bare machines
       - name: Download VC++ 2022 x64 Redistributable
