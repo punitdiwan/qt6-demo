@@ -15,6 +15,9 @@ CTestTestfile.cmake
 CMakeUserPresets.json
 _deps/
 
+# ── CMake-generated source files (do not edit directly) ─────────────────────
+src/app.rc
+
 # ── Qt auto-generated files (MOC, UIC, RCC) ─────────────────────────────────
 *_autogen/
 moc_*.cpp

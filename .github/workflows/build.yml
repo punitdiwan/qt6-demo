@@ -1,17 +1,21 @@
-name: Build
+name: Build & Release
 
+# ── Triggers ──────────────────────────────────────────────────────────────────
+# • branch push / PR  → build only  (no release published)
+# • tag push v*       → build + create GitHub Release with MSI & version.json
 on:
   push:
     branches: [ main, master ]
+    tags:     [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
-env:
-  APP_VERSION: "1.0.0"
+# APP_VERSION is NOT hardcoded here.
+# Each job reads it from CMakeLists.txt (single source of truth).
 
 jobs:
 
-  # ── Linux binary ────────────────────────────────────────────────────────────
+  # ── Linux binary ─────────────────────────────────────────────────────────────
   build-linux:
     name: Linux (x64)
     runs-on: ubuntu-latest
@@ -38,12 +42,23 @@ jobs:
           name: HelloQt6-linux-x64
           path: build/HelloQt6
 
-  # ── Windows MSI installer ───────────────────────────────────────────────────
+  # ── Windows MSI installer ────────────────────────────────────────────────────
   build-windows:
     name: Windows (x64) — MSI Installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      # ── Single source of truth: read version from CMakeLists.txt ─────────────
+      - name: Read version from CMakeLists.txt
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path CMakeLists.txt `
+              -Pattern 'project\s*\(\s*HelloQt6\s+VERSION\s+([\d.]+)' `
+          ).Matches[0].Groups[1].Value
+          if (-not $ver) { throw "Could not parse version from CMakeLists.txt" }
+          Write-Host "Detected version: $ver"
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4
@@ -71,26 +86,21 @@ jobs:
             --no-opengl-sw `
             deploy\HelloQt6.exe
 
-      # Feature 8: embed the VC++ 2022 runtime installer inside the MSI so
-      # it installs silently on machines that don't have it yet.
+      # Feature 8: embed VC++ 2022 runtime so it installs silently on bare machines
       - name: Download VC++ 2022 x64 Redistributable
         shell: pwsh
         run: |
-          Write-Host "Downloading vcredist_x64.exe..."
           Invoke-WebRequest `
               -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
               -OutFile "installer\vcredist_x64.exe"
           $mb = [math]::Round((Get-Item installer\vcredist_x64.exe).Length / 1MB, 1)
           Write-Host "Downloaded $mb MB"
 
-      # WiX heat.exe scans deploy/ and generates a ComponentGroup (DeployedFiles)
-      # that lists every file for the MSI to install under INSTALLFOLDER.
       - name: Harvest files with heat.exe
         shell: pwsh
         run: |
           $wix = Resolve-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" |
                    Select-Object -Last 1 -ExpandProperty Path
-          Write-Host "WiX bin: $wix"
 
           & "$wix\heat.exe" dir deploy `
               -o installer\HarvestedFiles.wxs `
@@ -105,16 +115,21 @@ jobs:
               -nologo
           if ($LASTEXITCODE -ne 0) { throw "heat.exe failed" }
 
-      # candle = compiler (.wxs → .wixobj)
-      # light  = linker  (.wixobj → .msi)
       - name: Compile & link MSI
         shell: pwsh
         run: |
-          $wix = Resolve-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" |
-                   Select-Object -Last 1 -ExpandProperty Path
+          $wix    = Resolve-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" |
+                      Select-Object -Last 1 -ExpandProperty Path
+          $wixVer = "$env:APP_VERSION.0"   # WiX requires 4-part: 1.2.3 → 1.2.3.0
+
+          # Derive the update-check URL from the GitHub repository so the
+          # installed registry key always points at the correct repo.
+          $updateUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/version.json"
 
           & "$wix\candle.exe" -arch x64 `
               -dDeployDir=deploy `
+              -dAppVersion=$wixVer `
+              -dUpdateUrl=$updateUrl `
               installer\HelloQt6.wxs `
               installer\HarvestedFiles.wxs `
               -nologo
@@ -128,20 +143,8 @@ jobs:
               -nologo
           if ($LASTEXITCODE -ne 0) { throw "light.exe failed" }
 
-      # Feature 10: code-sign the MSI with a PFX certificate stored as a
-      # GitHub secret. Skip if secrets are not configured (open-source forks,
-      # PRs from external contributors, etc.).
-      #
-      # To set up signing:
-      #   1. Export your code-signing certificate as a .pfx file
-      #   2. Base64-encode it:  certutil -encode cert.pfx cert.b64
-      #   3. Add two repository secrets:
-      #        SIGNING_CERT_BASE64   ← contents of cert.b64
-      #        SIGNING_CERT_PASSWORD ← PFX password
-      # Feature 10: code-sign the MSI.
-      # Secrets are injected as env vars; the script skips gracefully when
-      # they are absent (forks, draft PRs, dev builds).
-      - name: Sign MSI 
+      # Feature 10: code-sign the MSI (skips gracefully if secrets are absent)
+      - name: Sign MSI
         shell: pwsh
         env:
           CERT_B64: ${{ secrets.SIGNING_CERT_BASE64 }}
@@ -158,7 +161,6 @@ jobs:
           $signtool = Get-ChildItem `
               "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
               Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
-          Write-Host "signtool: $signtool"
 
           $msi = "HelloQt6-$env:APP_VERSION-Setup.msi"
           & $signtool sign `
@@ -173,29 +175,81 @@ jobs:
           Remove-Item $pfx -Force
           if ($LASTEXITCODE -ne 0) { throw "Code signing failed" }
 
-      # Generate version.json so the Qt auto-updater can discover new releases.
-      # Host this file at the URL stored in the installer registry key:
-      #   HKLM\Software\MaitretechSolution\HelloQt6 → UpdateUrl
+      # version.json is fetched by the Qt auto-updater at runtime.
+      # msi_url uses the specific tag so old releases stay downloadable
+      # even after newer versions are published.
       - name: Generate version.json
         shell: pwsh
         run: |
+          # Use the pushed tag (e.g. v1.1.0) when available; fall back to
+          # a constructed tag for branch/PR builds (artifacts only, not released).
+          $tag = if ($env:GITHUB_REF -like 'refs/tags/*') {
+              $env:GITHUB_REF_NAME
+          } else {
+              "v$env:APP_VERSION"
+          }
+
           $msiName = "HelloQt6-$env:APP_VERSION-Setup.msi"
           $json = [ordered]@{
               version       = $env:APP_VERSION
-              msi_url       = "https://github.com/${{ github.repository }}/releases/latest/download/$msiName"
-              release_notes = "See GitHub releases for full changelog."
+              msi_url       = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$tag/$msiName"
+              release_notes = "See https://github.com/$env:GITHUB_REPOSITORY/releases/tag/$tag"
           } | ConvertTo-Json -Compress
           $json | Out-File -FilePath "version.json" -Encoding utf8 -NoNewline
           Write-Host "version.json: $json"
 
-      - name: Upload MSI installer
+      - name: Upload MSI artifact
         uses: actions/upload-artifact@v4
         with:
           name: HelloQt6-windows-x64-installer
           path: HelloQt6-${{ env.APP_VERSION }}-Setup.msi
 
-      - name: Upload version manifest
+      - name: Upload version.json artifact
         uses: actions/upload-artifact@v4
         with:
           name: version-manifest
           path: version.json
+
+  # ── GitHub Release ────────────────────────────────────────────────────────────
+  # Runs only on tag pushes (v*). Waits for both build jobs to succeed,
+  # then creates a public GitHub Release and attaches the MSI, version.json,
+  # and Linux binary as downloadable assets.
+  #
+  # This makes the following URLs live immediately after the release is created:
+  #   https://github.com/OWNER/REPO/releases/latest/download/version.json
+  #   https://github.com/OWNER/REPO/releases/download/vX.Y.Z/HelloQt6-X.Y.Z-Setup.msi
+  # These are exactly the URLs the Qt auto-updater and installer registry key use.
+  release:
+    name: Publish GitHub Release
+    needs: [ build-linux, build-windows ]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write   # required to create releases and upload assets
+    steps:
+      - name: Download Windows MSI
+        uses: actions/download-artifact@v4
+        with:
+          name: HelloQt6-windows-x64-installer
+          path: dist/
+
+      - name: Download version.json
+        uses: actions/download-artifact@v4
+        with:
+          name: version-manifest
+          path: dist/
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: HelloQt6-linux-x64
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true   # auto-generates changelog from commits
+          files: |
+            dist/*.msi
+            dist/version.json
+            dist/HelloQt6

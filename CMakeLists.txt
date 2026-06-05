@@ -18,7 +18,10 @@ set(APP_SOURCES
 )
 
 if(WIN32)
-    list(APPEND APP_SOURCES src/app.rc)
+    # Generate app.rc from the template, substituting @PROJECT_VERSION_*@ variables.
+    # The generated file lives in the build directory — never edit it directly.
+    configure_file(src/app.rc.in ${CMAKE_CURRENT_BINARY_DIR}/app.rc @ONLY)
+    list(APPEND APP_SOURCES ${CMAKE_CURRENT_BINARY_DIR}/app.rc)
 endif()
 
 qt_add_executable(HelloQt6 ${APP_SOURCES})

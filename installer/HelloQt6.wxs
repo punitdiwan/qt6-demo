@@ -5,13 +5,20 @@
   UpgradeCode is permanent; never change it across versions.
   ProductId="*" generates a fresh GUID per build so Windows Installer
   treats each release as distinct and MajorUpgrade removes the old one.
+
+  AppVersion is injected by candle.exe from the CI workflow:
+    candle.exe -dAppVersion=X.Y.Z.0 ...
+  The define below is a fallback for local manual builds only.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <?define AppVersion = "1.0.0.0" ?>
+  <?define UpdateUrl  = "https://github.com/punitdiwan/qt6-demo/releases/latest/download/version.json" ?>
 
   <Product Id="*"
            Name="Hello Qt6"
            Language="1033"
-           Version="1.0.0.0"
+           Version="$(var.AppVersion)"
            Manufacturer="Maitretech Solution"
            UpgradeCode="{3F7B9E2A-C4D1-4E8F-A7B3-2C5D9E1F0A4B}">
 
@@ -148,7 +155,7 @@
                      Key="Software\MaitretechSolution\HelloQt6">
           <RegistryValue Name="UpdateUrl"
                          Type="string"
-                         Value="https://maitretech.com/releases/HelloQt6/version.json"
+                         Value="$(var.UpdateUrl)"
                          KeyPath="yes" />
         </RegistryKey>
       </Component>
