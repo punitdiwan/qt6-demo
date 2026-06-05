@@ -1,0 +1,72 @@
+# ── Build output directories ────────────────────────────────────────────────
+build/
+build-*/
+out/
+dist/
+deploy/
+.cache/
+
+# ── CMake generated files ────────────────────────────────────────────────────
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+CMakeUserPresets.json
+_deps/
+
+# ── Qt auto-generated files (MOC, UIC, RCC) ─────────────────────────────────
+*_autogen/
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+
+# ── Compiled binaries ────────────────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.so.*
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# ── WiX toolset output (generated at CI time, never committed) ───────────────
+installer/HarvestedFiles.wxs
+*.wixobj
+*.wixpdb
+*.msi
+*.cab
+
+# ── CPack output ─────────────────────────────────────────────────────────────
+*.tar.gz
+*.zip
+_CPack_Packages/
+
+# ── IDE: Qt Creator ──────────────────────────────────────────────────────────
+*.user
+*.pro.user
+*.pro.user.*
+CMakeLists.txt.user
+
+# ── IDE: Visual Studio ───────────────────────────────────────────────────────
+.vs/
+*.vcxproj.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# ── IDE: CLion / JetBrains ───────────────────────────────────────────────────
+.idea/
+cmake-build-*/
+
+# ── IDE: VS Code ─────────────────────────────────────────────────────────────
+.vscode/
+
+# ── OS noise ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

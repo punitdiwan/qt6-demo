@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3 installer — Hello Qt6 by Maitretech Solution
+
+  UpgradeCode is permanent; never change it across versions.
+  ProductId="*" generates a fresh GUID per build so Windows Installer
+  treats each release as distinct and MajorUpgrade removes the old one.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="Hello Qt6"
+           Language="1033"
+           Version="1.0.0.0"
+           Manufacturer="Maitretech Solution"
+           UpgradeCode="{3F7B9E2A-C4D1-4E8F-A7B3-2C5D9E1F0A4B}">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Hello Qt6 Application Installer"
+             Manufacturer="Maitretech Solution" />
+
+    <!-- Remove old version cleanly before installing new one -->
+    <MajorUpgrade
+        DowngradeErrorMessage="A newer version of Hello Qt6 is already installed." />
+
+    <!-- Single-file installer: all files embedded in the .msi cabinet -->
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- ── Publisher info shown in Settings → Apps & Features ────── -->
+    <Property Id="ARPURLINFOABOUT" Value="https://maitretech.com" />
+    <Property Id="ARPHELPLINK"     Value="https://maitretech.com/support" />
+    <Property Id="ARPCONTACT"      Value="support@maitretech.com" />
+    <Property Id="ARPNOREPAIR"     Value="1" />
+
+    <!-- ── Feature 8: Prerequisite — VC++ 2015-2022 x64 Runtime ─── -->
+    <!--
+      Checks for VS14 runtime (covers VS 2015 through 2022 — they share the
+      same redistributable). vcredist_x64.exe is downloaded at CI time and
+      embedded in the Binary table so the MSI is fully self-contained.
+    -->
+    <Property Id="VCRUNTIME_INSTALLED">
+      <RegistrySearch Id="VCRuntimeSearch" Root="HKLM" Win64="yes"
+          Key="SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+          Name="Installed" Type="raw" />
+    </Property>
+
+    <Binary Id="VCRedist" SourceFile="installer\vcredist_x64.exe" />
+
+    <CustomAction Id="InstallVCRuntime"
+                  BinaryKey="VCRedist"
+                  ExeCommand="/install /quiet /norestart"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <!--
+      Deferred custom actions must be scheduled after InstallInitialize.
+      We run vcredist before InstallFiles so our app can start correctly
+      the moment installation finishes.
+    -->
+    <InstallExecuteSequence>
+      <Custom Action="InstallVCRuntime" Before="InstallFiles">
+        <![CDATA[NOT VCRUNTIME_INSTALLED]]>
+      </Custom>
+    </InstallExecuteSequence>
+
+    <!-- ── Directory layout ───────────────────────────────────────── -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+
+      <!-- C:\Program Files\Hello_Qt6\ -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="Hello_Qt6" />
+      </Directory>
+
+      <!-- Start Menu → Programs → Hello Qt6 -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="Hello Qt6" />
+      </Directory>
+
+      <!-- User Desktop -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+
+    </Directory>
+
+    <!-- ── Start Menu shortcut ────────────────────────────────────── -->
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="StartMenuShortcut"
+                 Guid="{A2C4E6F8-1B3D-5E7F-9A0B-2C4D6E8F1A3B}">
+        <Shortcut Id="AppStartMenu"
+                  Name="Hello Qt6"
+                  Description="Hello Qt6 — Maitretech Solution"
+                  Target="[INSTALLFOLDER]HelloQt6.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\MaitretechSolution\HelloQt6"
+                       Name="StartMenuShortcut"
+                       Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ── Desktop shortcut ───────────────────────────────────────── -->
+    <DirectoryRef Id="DesktopFolder">
+      <Component Id="DesktopShortcut"
+                 Guid="{B3D5F7A9-2C4E-6F8A-0B1C-3D5E7F9A1B2C}">
+        <Shortcut Id="AppDesktop"
+                  Name="Hello Qt6"
+                  Description="Hello Qt6 — Maitretech Solution"
+                  Target="[INSTALLFOLDER]HelloQt6.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU"
+                       Key="Software\MaitretechSolution\HelloQt6"
+                       Name="DesktopShortcut"
+                       Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ── Feature 9: Auto-start on Windows login ─────────────────── -->
+    <!--
+      Adds the app to HKCU Run so it starts with Windows for the
+      installing user. Removed automatically on uninstall.
+    -->
+    <DirectoryRef Id="INSTALLFOLDER">
+
+      <Component Id="AutoStart"
+                 Guid="{C4E6A8B2-3D5F-7A9B-1C2D-4E6F8A0B2C4D}">
+        <RegistryValue Root="HKCU"
+                       Key="Software\Microsoft\Windows\CurrentVersion\Run"
+                       Name="HelloQt6"
+                       Type="string"
+                       Value="[INSTALLFOLDER]HelloQt6.exe"
+                       KeyPath="yes" />
+      </Component>
+
+      <!-- ── Auto-update config ──────────────────────────────────────── -->
+      <!--
+        Stores the update-check URL under HKLM so the Qt app reads it on
+        startup. IT admins can override this value via GPO or a transform
+        (.mst) to point at an internal update server.
+      -->
+      <Component Id="UpdateConfig"
+                 Guid="{D5F7B9C3-4E6A-8B0C-2D3E-5F7A9B1C3D5E}">
+        <RegistryKey Root="HKLM"
+                     Key="Software\MaitretechSolution\HelloQt6">
+          <RegistryValue Name="UpdateUrl"
+                         Type="string"
+                         Value="https://maitretech.com/releases/HelloQt6/version.json"
+                         KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+    </DirectoryRef>
+
+    <!-- ── Features ───────────────────────────────────────────────── -->
+    <Feature Id="ProductFeature" Title="Hello Qt6" Level="1">
+      <ComponentGroupRef Id="DeployedFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="AutoStart" />
+      <ComponentRef Id="UpdateConfig" />
+    </Feature>
+
+    <!-- ── Installer wizard UI ────────────────────────────────────── -->
+    <!--
+      WixUI_InstallDir: Welcome → Install Location → Installing → Finish.
+      The MSI uninstaller is registered automatically in Apps & Features.
+      Feature 10 (code signing) is applied to the .msi in the CI workflow
+      using signtool — no WiX changes needed for that.
+    -->
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="installer\License.rtf" />
+
+  </Product>
+</Wix>

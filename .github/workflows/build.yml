@@ -1,0 +1,194 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  APP_VERSION: "1.0.0"
+
+jobs:
+
+  # ── Linux binary ────────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux (x64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Configure & build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloQt6-linux-x64
+          path: build/HelloQt6
+
+  # ── Windows MSI installer ───────────────────────────────────────────────────
+  build-windows:
+    name: Windows (x64) — MSI Installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Configure & build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --parallel
+
+      # Collect HelloQt6.exe + all required Qt DLLs into deploy/
+      - name: Stage with windeployqt
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force deploy | Out-Null
+          Copy-Item "build\Release\HelloQt6.exe" deploy\
+          windeployqt `
+            --no-translations `
+            --no-system-d3d-compiler `
+            --no-opengl-sw `
+            deploy\HelloQt6.exe
+
+      # Feature 8: embed the VC++ 2022 runtime installer inside the MSI so
+      # it installs silently on machines that don't have it yet.
+      - name: Download VC++ 2022 x64 Redistributable
+        shell: pwsh
+        run: |
+          Write-Host "Downloading vcredist_x64.exe..."
+          Invoke-WebRequest `
+              -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" `
+              -OutFile "installer\vcredist_x64.exe"
+          $mb = [math]::Round((Get-Item installer\vcredist_x64.exe).Length / 1MB, 1)
+          Write-Host "Downloaded $mb MB"
+
+      # WiX heat.exe scans deploy/ and generates a ComponentGroup (DeployedFiles)
+      # that lists every file for the MSI to install under INSTALLFOLDER.
+      - name: Harvest files with heat.exe
+        shell: pwsh
+        run: |
+          $wix = Resolve-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" |
+                   Select-Object -Last 1 -ExpandProperty Path
+          Write-Host "WiX bin: $wix"
+
+          & "$wix\heat.exe" dir deploy `
+              -o installer\HarvestedFiles.wxs `
+              -scom `
+              -frag `
+              -srd `
+              -sreg `
+              -gg `
+              -cg DeployedFiles `
+              -dr INSTALLFOLDER `
+              -var var.DeployDir `
+              -nologo
+          if ($LASTEXITCODE -ne 0) { throw "heat.exe failed" }
+
+      # candle = compiler (.wxs → .wixobj)
+      # light  = linker  (.wixobj → .msi)
+      - name: Compile & link MSI
+        shell: pwsh
+        run: |
+          $wix = Resolve-Path "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" |
+                   Select-Object -Last 1 -ExpandProperty Path
+
+          & "$wix\candle.exe" -arch x64 `
+              -dDeployDir=deploy `
+              installer\HelloQt6.wxs `
+              installer\HarvestedFiles.wxs `
+              -nologo
+          if ($LASTEXITCODE -ne 0) { throw "candle.exe failed" }
+
+          $msi = "HelloQt6-$env:APP_VERSION-Setup.msi"
+          & "$wix\light.exe" `
+              HelloQt6.wixobj HarvestedFiles.wixobj `
+              -ext WixUIExtension `
+              -out $msi `
+              -nologo
+          if ($LASTEXITCODE -ne 0) { throw "light.exe failed" }
+
+      # Feature 10: code-sign the MSI with a PFX certificate stored as a
+      # GitHub secret. Skip if secrets are not configured (open-source forks,
+      # PRs from external contributors, etc.).
+      #
+      # To set up signing:
+      #   1. Export your code-signing certificate as a .pfx file
+      #   2. Base64-encode it:  certutil -encode cert.pfx cert.b64
+      #   3. Add two repository secrets:
+      #        SIGNING_CERT_BASE64   ← contents of cert.b64
+      #        SIGNING_CERT_PASSWORD ← PFX password
+      - name: Sign MSI (Feature 10)
+        if: ${{ secrets.SIGNING_CERT_BASE64 != '' && secrets.SIGNING_CERT_PASSWORD != '' }}
+        shell: pwsh
+        env:
+          CERT_B64: ${{ secrets.SIGNING_CERT_BASE64 }}
+          CERT_PWD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          $pfx = "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
+
+          $signtool = Get-ChildItem `
+              "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+          Write-Host "signtool: $signtool"
+
+          $msi = "HelloQt6-$env:APP_VERSION-Setup.msi"
+          & $signtool sign `
+              /fd SHA256 `
+              /tr http://timestamp.digicert.com `
+              /td SHA256 `
+              /f  $pfx `
+              /p  $env:CERT_PWD `
+              /d  "Hello Qt6 by Maitretech Solution" `
+              $msi
+
+          Remove-Item $pfx -Force
+          if ($LASTEXITCODE -ne 0) { throw "Code signing failed" }
+
+      # Generate version.json so the Qt auto-updater can discover new releases.
+      # Host this file at the URL stored in the installer registry key:
+      #   HKLM\Software\MaitretechSolution\HelloQt6 → UpdateUrl
+      - name: Generate version.json
+        shell: pwsh
+        run: |
+          $msiName = "HelloQt6-$env:APP_VERSION-Setup.msi"
+          $json = [ordered]@{
+              version       = $env:APP_VERSION
+              msi_url       = "https://github.com/${{ github.repository }}/releases/latest/download/$msiName"
+              release_notes = "See GitHub releases for full changelog."
+          } | ConvertTo-Json -Compress
+          $json | Out-File -FilePath "version.json" -Encoding utf8 -NoNewline
+          Write-Host "version.json: $json"
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloQt6-windows-x64-installer
+          path: HelloQt6-${{ env.APP_VERSION }}-Setup.msi
+
+      - name: Upload version manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-manifest
+          path: version.json
