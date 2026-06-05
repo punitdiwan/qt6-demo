@@ -138,13 +138,20 @@ jobs:
       #   3. Add two repository secrets:
       #        SIGNING_CERT_BASE64   ← contents of cert.b64
       #        SIGNING_CERT_PASSWORD ← PFX password
-      - name: Sign MSI (Feature 10)
-        if: ${{ secrets.SIGNING_CERT_BASE64 != '' && secrets.SIGNING_CERT_PASSWORD != '' }}
+      # Feature 10: code-sign the MSI.
+      # Secrets are injected as env vars; the script skips gracefully when
+      # they are absent (forks, draft PRs, dev builds).
+      - name: Sign MSI 
         shell: pwsh
         env:
           CERT_B64: ${{ secrets.SIGNING_CERT_BASE64 }}
           CERT_PWD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: |
+          if (-not $env:CERT_B64 -or -not $env:CERT_PWD) {
+            Write-Host "Signing secrets not configured — skipping."
+            exit 0
+          }
+
           $pfx = "signing.pfx"
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_B64))
 
