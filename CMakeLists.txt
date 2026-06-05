@@ -11,10 +11,14 @@ find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
 
 set(APP_SOURCES
     src/main.cpp
+    src/logindialog.cpp
+    src/logindialog.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/logger.cpp
     src/logger.h
+    src/singleinstance.cpp
+    src/singleinstance.h
     src/updater/updatemanager.cpp
     src/updater/updatemanager.h
 )

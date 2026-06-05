@@ -46,6 +46,15 @@ MainWindow::MainWindow(QWidget *parent)
     Logger::write("MainWindow", "Window created.");
 }
 
+void MainWindow::bringToFront()
+{
+    setWindowState(windowState() & ~Qt::WindowMinimized);
+    show();
+    raise();
+    activateWindow();
+    Logger::write("MainWindow", "Raised to front by secondary instance.");
+}
+
 void MainWindow::onButtonClicked()
 {
     ++m_clickCount;

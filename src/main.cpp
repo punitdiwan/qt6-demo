@@ -4,7 +4,9 @@
 #include <QStandardPaths>
 
 #include "logger.h"
+#include "logindialog.h"
 #include "mainwindow.h"
+#include "singleinstance.h"
 #include "updater/updatemanager.h"
 
 int main(int argc, char *argv[])
@@ -31,6 +33,14 @@ int main(int argc, char *argv[])
     Logger::instance().setLogFile(logDir + "/app.log");
     Logger::write("App", QString("=== Started v%1 ===").arg(APP_VERSION));
 
+    // ── Single instance guard ───────────────────────────────────────────────
+    // Uses the UpgradeCode GUID as the key so it is unique to this product.
+    SingleInstanceGuard guard("HelloQt6-{3F7B9E2A-C4D1-4E8F-A7B3-2C5D9E1F0A4B}");
+    if (!guard.isPrimary()) {
+        Logger::write("App", "Another instance is running — exiting.");
+        return 0;
+    }
+
     // ── Update-check URL ────────────────────────────────────────────────────
     // Written by the installer:  HKLM\Software\MaitretechSolution\HelloQt6\UpdateUrl
 #ifdef Q_OS_WIN
@@ -52,8 +62,19 @@ int main(int argc, char *argv[])
     Logger::write("App", "Update URL: " + updateUrl);
     UpdateManager::instance().setCheckUrl(updateUrl);
 
+    // ── Login gate ──────────────────────────────────────────────────────────
+    LoginDialog login;
+    if (login.exec() != QDialog::Accepted) {
+        Logger::write("App", "Login cancelled — exiting.");
+        return 0;
+    }
+
     MainWindow window;
     window.show();
+
+    // If a second instance starts while we are running, bring our window up.
+    QObject::connect(&guard, &SingleInstanceGuard::secondaryInstanceStarted,
+                     &window, &MainWindow::bringToFront);
 
     UpdateManager::instance().checkForUpdates();
 

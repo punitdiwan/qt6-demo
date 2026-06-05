@@ -10,6 +10,9 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
 
+    // Called by SingleInstanceGuard when a second launch is attempted.
+    void bringToFront();
+
 private slots:
     void onButtonClicked();
     void onUpdateAvailable(const QString &version,
