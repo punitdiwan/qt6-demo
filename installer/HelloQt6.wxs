@@ -55,22 +55,43 @@
 
     <Binary Id="VCRedist" SourceFile="installer\vcredist_x64.exe" />
 
+    <!--
+      Return="ignore" is intentional and correct for vcredist.
+      vcredist returns several non-zero codes that are NOT failures:
+        0    = success
+        3010 = success, restart required  ← would fail with Return="check"
+        1638 = newer version already installed  ← would fail with Return="check"
+        1641 = success, restart initiated
+      Using Return="check" causes the "A program as part of setup did not
+      finish as expected" error on machines that already have a newer runtime.
+    -->
     <CustomAction Id="InstallVCRuntime"
                   BinaryKey="VCRedist"
                   ExeCommand="/install /quiet /norestart"
                   Execute="deferred"
                   Impersonate="no"
-                  Return="check" />
+                  Return="ignore" />
 
     <!--
-      Deferred custom actions must be scheduled after InstallInitialize.
-      We run vcredist before InstallFiles so our app can start correctly
-      the moment installation finishes.
+      Run vcredist only when the runtime is absent AND we are installing
+      (not uninstalling). REMOVE action sets Installed; NOT REMOVE guards
+      against running vcredist during uninstall.
     -->
     <InstallExecuteSequence>
+
+      <!-- VC++ runtime: only on fresh install when runtime is absent -->
       <Custom Action="InstallVCRuntime" Before="InstallFiles">
-        <![CDATA[NOT VCRUNTIME_INSTALLED]]>
+        <![CDATA[NOT VCRUNTIME_INSTALLED AND NOT REMOVE]]>
       </Custom>
+
+      <!-- Log: capture directory + version in immediate phase (before deferred begins) -->
+      <Custom Action="SetInstallLogData"   Before="InstallInitialize"><![CDATA[NOT REMOVE]]></Custom>
+      <Custom Action="SetUninstallLogData" Before="InstallInitialize"><![CDATA[REMOVE]]></Custom>
+
+      <!-- Log: write timestamped entry in deferred phase -->
+      <Custom Action="WriteInstallLog"   After="InstallInitialize"><![CDATA[NOT REMOVE]]></Custom>
+      <Custom Action="WriteUninstallLog" Before="RemoveFiles">      <![CDATA[REMOVE]]></Custom>
+
     </InstallExecuteSequence>
 
     <!-- ── Directory layout ───────────────────────────────────────── -->
@@ -88,6 +109,15 @@
 
       <!-- User Desktop -->
       <Directory Id="DesktopFolder" Name="Desktop" />
+
+      <!-- C:\ProgramData\MaitretechSolution\HelloQt6\
+           This directory holds install.log (written by the installer) and
+           app.log (written by the Qt app). Both are removed on uninstall. -->
+      <Directory Id="CommonAppDataFolder">
+        <Directory Id="MaitretechProgramData" Name="MaitretechSolution">
+          <Directory Id="AppProgramData" Name="HelloQt6" />
+        </Directory>
+      </Directory>
 
     </Directory>
 
@@ -122,6 +152,75 @@
                        Key="Software\MaitretechSolution\HelloQt6"
                        Name="DesktopShortcut"
                        Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- ── Log directory: create on install, clean up on uninstall ──── -->
+    <!--
+      SetProperty CAs (immediate) capture directory paths before the deferred
+      phase starts — the only way to pass MSI properties to deferred CAs.
+      The JScript CAs append a timestamped line to install.log:
+        on install  → "[2025-06-05 10:30] INSTALLED v1.0.0"
+        on uninstall → "[2025-06-05 11:00] UNINSTALLED v1.0.0"
+      RemoveFile then deletes both log files so nothing is left behind.
+    -->
+    <CustomAction Id="SetInstallLogData"
+                  Property="WriteInstallLog"
+                  Value="[AppProgramData];[ProductVersion]" />
+
+    <CustomAction Id="WriteInstallLog"
+                  Script="jscript"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"><![CDATA[
+      try {
+        var p   = Session.Property("CustomActionData").split(";");
+        var dir = p[0], ver = p[1];
+        var fso = new ActiveXObject("Scripting.FileSystemObject");
+        if (!fso.FolderExists(dir)) fso.CreateFolder(dir);
+        var ts  = fso.OpenTextFile(dir + "install.log", 8, true);
+        ts.WriteLine("[" + new Date().toLocaleString() + "] INSTALLED v" + ver);
+        ts.Close();
+      } catch(e) { /* never fail the install due to a log error */ }
+    ]]></CustomAction>
+
+    <CustomAction Id="SetUninstallLogData"
+                  Property="WriteUninstallLog"
+                  Value="[AppProgramData];[ProductVersion]" />
+
+    <CustomAction Id="WriteUninstallLog"
+                  Script="jscript"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"><![CDATA[
+      try {
+        var p   = Session.Property("CustomActionData").split(";");
+        var dir = p[0], ver = p[1];
+        var fso = new ActiveXObject("Scripting.FileSystemObject");
+        if (fso.FolderExists(dir)) {
+          var ts = fso.OpenTextFile(dir + "install.log", 8, true);
+          ts.WriteLine("[" + new Date().toLocaleString() + "] UNINSTALLED v" + ver);
+          ts.Close();
+        }
+      } catch(e) {}
+    ]]></CustomAction>
+
+    <DirectoryRef Id="AppProgramData">
+      <Component Id="AppLogDirectory"
+                 Guid="{E6F8A0B2-5C7D-9E1F-3A4B-6C8E0A2B4C6D}">
+        <CreateFolder />
+        <!-- Remove log files written by installer and Qt app on uninstall -->
+        <RemoveFile Id="RemoveInstallLog" Name="install.log" On="uninstall" />
+        <RemoveFile Id="RemoveAppLog"     Name="app.log"     On="uninstall" />
+        <!-- Remove the folders if empty after file removal -->
+        <RemoveFolder Id="RemoveAppProgramDataDir"    Directory="AppProgramData"      On="uninstall" />
+        <RemoveFolder Id="RemoveMaitretechProgramData" Directory="MaitretechProgramData" On="uninstall" />
+        <RegistryValue Root="HKLM"
+                       Key="Software\MaitretechSolution\HelloQt6"
+                       Name="LogDir"
+                       Type="string"
+                       Value="[AppProgramData]"
                        KeyPath="yes" />
       </Component>
     </DirectoryRef>
@@ -169,6 +268,7 @@
       <ComponentRef Id="DesktopShortcut" />
       <ComponentRef Id="AutoStart" />
       <ComponentRef Id="UpdateConfig" />
+      <ComponentRef Id="AppLogDirectory" />
     </Feature>
 
     <!-- ── Installer wizard UI ────────────────────────────────────── -->

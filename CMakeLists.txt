@@ -13,6 +13,8 @@ set(APP_SOURCES
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
+    src/logger.cpp
+    src/logger.h
     src/updater/updatemanager.cpp
     src/updater/updatemanager.h
 )

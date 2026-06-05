@@ -1,5 +1,9 @@
 #include <QApplication>
+#include <QDir>
 #include <QSettings>
+#include <QStandardPaths>
+
+#include "logger.h"
 #include "mainwindow.h"
 #include "updater/updatemanager.h"
 
@@ -11,31 +15,49 @@ int main(int argc, char *argv[])
     app.setApplicationName("HelloQt6");
     app.setApplicationVersion(APP_VERSION);
 
-    // Read the update-check URL that the installer writes to the system registry
-    // (HKLM\Software\MaitretechSolution\HelloQt6 → UpdateUrl).
-    // Falls back to the default endpoint if the key is absent (dev builds, Linux).
+    // ── Log directory ───────────────────────────────────────────────────────
+    // On Windows the installer creates %ProgramData%\MaitretechSolution\HelloQt6\
+    // and removes it on uninstall. We write app.log there so install.log and
+    // app.log live side-by-side and are cleaned up together.
+    // On Linux we fall back to the standard writable data location.
+#ifdef Q_OS_WIN
+    const QString logDir = QDir(qEnvironmentVariable("ProgramData"))
+                               .filePath("MaitretechSolution/HelloQt6");
+#else
+    const QString logDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+#endif
+
+    Logger::instance().setLogFile(logDir + "/app.log");
+    Logger::write("App", QString("=== Started v%1 ===").arg(APP_VERSION));
+
+    // ── Update-check URL ────────────────────────────────────────────────────
+    // Written by the installer:  HKLM\Software\MaitretechSolution\HelloQt6\UpdateUrl
 #ifdef Q_OS_WIN
     QSettings sysReg(
         R"(HKEY_LOCAL_MACHINE\Software\MaitretechSolution\HelloQt6)",
         QSettings::NativeFormat);
     const QString updateUrl = sysReg.value(
         "UpdateUrl",
-        "https://maitretech.com/releases/HelloQt6/version.json").toString();
+        "https://github.com/your-org/HelloQt6/releases/latest/download/version.json"
+    ).toString();
 #else
     QSettings cfg;
     const QString updateUrl = cfg.value(
         "updateUrl",
-        "https://maitretech.com/releases/HelloQt6/version.json").toString();
+        "https://github.com/your-org/HelloQt6/releases/latest/download/version.json"
+    ).toString();
 #endif
 
+    Logger::write("App", "Update URL: " + updateUrl);
     UpdateManager::instance().setCheckUrl(updateUrl);
 
     MainWindow window;
     window.show();
 
-    // Kick off a background update check after the window is visible.
-    // Results arrive asynchronously via UpdateManager signals wired in MainWindow.
     UpdateManager::instance().checkForUpdates();
 
-    return app.exec();
+    const int ret = app.exec();
+    Logger::write("App", QString("=== Exited (code %1) ===").arg(ret));
+    return ret;
 }

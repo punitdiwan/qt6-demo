@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "logger.h"
 #include "updater/updatemanager.h"
 
 #include <QApplication>
@@ -37,11 +38,12 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_button, &QPushButton::clicked,
             this,     &MainWindow::onButtonClicked);
 
-    // Wire auto-update signals from UpdateManager (check is fired in main.cpp)
     connect(&UpdateManager::instance(), &UpdateManager::updateAvailable,
             this, &MainWindow::onUpdateAvailable);
     connect(&UpdateManager::instance(), &UpdateManager::readyToInstall,
             this, &MainWindow::onReadyToInstall);
+
+    Logger::write("MainWindow", "Window created.");
 }
 
 void MainWindow::onButtonClicked()
@@ -56,7 +58,8 @@ void MainWindow::onUpdateAvailable(const QString &version,
                                    const QString &msiUrl,
                                    const QString &releaseNotes)
 {
-    // Show a non-intrusive status-bar button; user decides when to act.
+    Logger::write("MainWindow", "Update available: v" + version);
+
     auto *btn = new QPushButton(
         QString("Update available: v%1 — click to install").arg(version),
         statusBar());
@@ -71,17 +74,21 @@ void MainWindow::onUpdateAvailable(const QString &version,
                       "Download and install now? The app will close.").arg(version, releaseNotes);
 
         if (QMessageBox::question(this, "Update Available", msg) == QMessageBox::Yes) {
+            Logger::write("MainWindow", "User accepted update to v" + version);
             btn->setEnabled(false);
             btn->setText("Downloading…");
             UpdateManager::instance().downloadUpdate(msiUrl);
+        } else {
+            Logger::write("MainWindow", "User deferred update to v" + version);
         }
     });
 }
 
 void MainWindow::onReadyToInstall(const QString &installerPath)
 {
+    Logger::write("MainWindow", "Launching installer: " + installerPath);
+
 #ifdef Q_OS_WIN
-    // Detach msiexec so it keeps running after this process exits.
     QProcess::startDetached("msiexec", {"/i", installerPath, "/quiet", "/norestart"});
     QApplication::quit();
 #else
